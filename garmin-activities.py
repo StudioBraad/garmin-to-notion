@@ -1,5 +1,6 @@
 import os
 from datetime import datetime, UTC, timedelta
+from pathlib import Path
 
 import pytz
 from dotenv import load_dotenv
@@ -169,22 +170,14 @@ def activity_needs_update(existing_activity: dict, new_activity: dict) -> bool:
         existing_props['Distance (km)']['number'] != round(new_activity.get('distance', 0) / 1000, 2) or
         existing_props['Duration (min)']['number'] != round(new_activity.get('duration', 0) / 60, 2) or
         existing_props['Calories']['number'] != round(new_activity.get('calories', 0)) or
-        existing_props['Avg Pace']['rich_text'][0]['text']['content'] != format_pace(
-        new_activity.get('averageSpeed', 0)
-    ) or
+        existing_props['Avg Pace']['rich_text'][0]['text']['content'] != format_pace(new_activity.get('averageSpeed', 0)) or
         existing_props['Avg Power']['number'] != round(new_activity.get('avgPower', 0), 1) or
         existing_props['Max Power']['number'] != round(new_activity.get('maxPower', 0), 1) or
-        existing_props['Training Effect']['select']['name'] != format_training_effect(
-        new_activity.get('trainingEffectLabel', 'Unknown')
-    ) or
+        existing_props['Training Effect']['select']['name'] != format_training_effect(new_activity.get('trainingEffectLabel', 'Unknown')) or
         existing_props['Aerobic']['number'] != round(new_activity.get('aerobicTrainingEffect', 0), 1) or
-        existing_props['Aerobic Effect']['select']['name'] != format_training_message(
-        new_activity.get('aerobicTrainingEffectMessage', 'Unknown')
-    ) or
+        existing_props['Aerobic Effect']['select']['name'] != format_training_message(new_activity.get('aerobicTrainingEffectMessage', 'Unknown')) or
         existing_props['Anaerobic']['number'] != round(new_activity.get('anaerobicTrainingEffect', 0), 1) or
-        existing_props['Anaerobic Effect']['select']['name'] != format_training_message(
-        new_activity.get('anaerobicTrainingEffectMessage', 'Unknown')
-    ) or
+        existing_props['Anaerobic Effect']['select']['name'] != format_training_message(new_activity.get('anaerobicTrainingEffectMessage', 'Unknown')) or
         existing_props['PR']['checkbox'] != new_activity.get('pr', False) or
         existing_props['Fav']['checkbox'] != new_activity.get('favorite', False) or
         existing_props['Activity Type']['select']['name'] != activity_type or
@@ -218,13 +211,9 @@ def create_activity(notion_client: NotionClient, database_id: str, activity: dic
         "Max Power": {"number": round(activity.get('maxPower', 0), 1)},
         "Training Effect": {"select": {"name": format_training_effect(activity.get('trainingEffectLabel', 'Unknown'))}},
         "Aerobic": {"number": round(activity.get('aerobicTrainingEffect', 0), 1)},
-        "Aerobic Effect": {
-            "select": {"name": format_training_message(activity.get('aerobicTrainingEffectMessage', 'Unknown'))}
-        },
+        "Aerobic Effect": {"select": {"name": format_training_message(activity.get('aerobicTrainingEffectMessage', 'Unknown'))}},
         "Anaerobic": {"number": round(activity.get('anaerobicTrainingEffect', 0), 1)},
-        "Anaerobic Effect": {
-            "select": {"name": format_training_message(activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}
-        },
+        "Anaerobic Effect": {"select": {"name": format_training_message(activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}},
         "PR": {"checkbox": activity.get('pr', False)},
         "Fav": {"checkbox": activity.get('favorite', False)}
     }
@@ -260,17 +249,11 @@ def update_activity(notion_client: NotionClient, existing_activity: dict, new_ac
         "Avg Pace": {"rich_text": [{"text": {"content": format_pace(new_activity.get('averageSpeed', 0))}}]},
         "Avg Power": {"number": round(new_activity.get('avgPower', 0), 1)},
         "Max Power": {"number": round(new_activity.get('maxPower', 0), 1)},
-        "Training Effect": {
-            "select": {"name": format_training_effect(new_activity.get('trainingEffectLabel', 'Unknown'))}
-        },
+        "Training Effect": {"select": {"name": format_training_effect(new_activity.get('trainingEffectLabel', 'Unknown'))}},
         "Aerobic": {"number": round(new_activity.get('aerobicTrainingEffect', 0), 1)},
-        "Aerobic Effect": {
-            "select": {"name": format_training_message(new_activity.get('aerobicTrainingEffectMessage', 'Unknown'))}
-        },
+        "Aerobic Effect": {"select": {"name": format_training_message(new_activity.get('aerobicTrainingEffectMessage', 'Unknown'))}},
         "Anaerobic": {"number": round(new_activity.get('anaerobicTrainingEffect', 0), 1)},
-        "Anaerobic Effect": {
-            "select": {"name": format_training_message(new_activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}
-        },
+        "Anaerobic Effect": {"select": {"name": format_training_message(new_activity.get('anaerobicTrainingEffectMessage', 'Unknown'))}},
         "PR": {"checkbox": new_activity.get('pr', False)},
         "Fav": {"checkbox": new_activity.get('favorite', False)}
     }
@@ -296,9 +279,36 @@ def main():
     database_id = os.getenv("NOTION_DB_ID")
     garmin_fetch_limit = int(os.getenv("GARMIN_ACTIVITIES_FETCH_LIMIT") or "1000")
 
-    # Initialize Garmin client and login
-    garmin_client = GarminClient(garmin_email, garmin_password)
-    garmin_client.login()
+    # -----------------------------
+    # Garmin LOGIN met MFA + tokens
+    # -----------------------------
+    tokenstore = str(Path.home() / ".garminconnect")
+
+    try:
+        # 1) Probeer bestaande tokens
+        garmin_client = GarminClient()
+        garmin_client.login(tokenstore)
+        print("Login via opgeslagen tokens gelukt.")
+    except Exception:
+        # 2) Zo niet: login met MFA
+        print("Geen geldige tokens gevonden. Start nieuwe login...")
+
+        garmin_client = GarminClient(
+            email=garmin_email,
+            password=garmin_password,
+            return_on_mfa=True
+        )
+
+        result1, result2 = garmin_client.login()
+
+        if result1 == "needs_mfa":
+            mfa_code = input("Voer Garmin MFA code uit je mail in: ")
+            garmin_client.resume_login(result2, mfa_code)
+
+        # 3) Tokens opslaan voor volgende keer
+        garmin_client.garth.dump(tokenstore)
+        print("Nieuwe tokens opgeslagen.")
+
     notion_client = NotionClient(auth=notion_token)
 
     # Get all activities
