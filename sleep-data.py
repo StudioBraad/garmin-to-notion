@@ -1,9 +1,12 @@
 from datetime import datetime
+from pathlib import Path
+import os
+
 from garminconnect import Garmin
 from notion_client import Client
 from dotenv import load_dotenv, dotenv_values
 import pytz
-import os
+
 
 # Constants
 local_tz = pytz.timezone("America/New_York")
@@ -12,13 +15,49 @@ local_tz = pytz.timezone("America/New_York")
 load_dotenv()
 CONFIG = dotenv_values()
 
+
+def login_garmin_with_mfa(email: str, password: str) -> Garmin:
+    """
+    Logt in op Garmin:
+    - eerst via opgeslagen tokens in ~/.garminconnect
+    - anders via MFA flow (return_on_mfa=True) en vraagt om code
+    - slaat daarna tokens op
+    """
+    tokenstore = str(Path.home() / ".garminconnect")
+
+    # 1) tokens proberen
+    try:
+        g = Garmin()
+        g.login(tokenstore)
+        print("Garmin login via tokens gelukt.")
+        return g
+    except Exception:
+        pass
+
+    # 2) MFA login
+    print("Geen geldige tokens. Nieuwe Garmin login (met MFA) ...")
+    g = Garmin(email=email, password=password, return_on_mfa=True)
+    result1, result2 = g.login()
+
+    if result1 == "needs_mfa":
+        mfa_code = input("Voer Garmin MFA code uit je mail in: ")
+        g.resume_login(result2, mfa_code)
+
+    # 3) tokens opslaan
+    g.garth.dump(tokenstore)
+    print("Nieuwe Garmin tokens opgeslagen.")
+    return g
+
+
 def get_sleep_data(garmin):
     today = datetime.today().date()
     return garmin.get_sleep_data(today.isoformat())
 
+
 def format_duration(seconds):
     minutes = (seconds or 0) // 60
     return f"{minutes // 60}h {minutes % 60}m"
+
 
 def format_time(timestamp):
     return (
@@ -26,14 +65,17 @@ def format_time(timestamp):
         if timestamp else None
     )
 
+
 def format_time_readable(timestamp):
     return (
         datetime.fromtimestamp(timestamp / 1000, local_tz).strftime("%H:%M")
         if timestamp else "Unknown"
     )
 
+
 def format_date_for_name(sleep_date):
     return datetime.strptime(sleep_date, "%Y-%m-%d").strftime("%d.%m.%Y") if sleep_date else "Unknown"
+
 
 def sleep_data_exists(client, database_id, sleep_date):
     query = client.databases.query(
@@ -41,19 +83,19 @@ def sleep_data_exists(client, database_id, sleep_date):
         filter={"property": "Long Date", "date": {"equals": sleep_date}}
     )
     results = query.get('results', [])
-    return results[0] if results else None  # Ensure it returns None instead of causing IndexError
+    return results[0] if results else None
+
 
 def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
     daily_sleep = sleep_data.get('dailySleepDTO', {})
     if not daily_sleep:
         return
-    
+
     sleep_date = daily_sleep.get('calendarDate', "Unknown Date")
     total_sleep = sum(
         (daily_sleep.get(k, 0) or 0) for k in ['deepSleepSeconds', 'lightSleepSeconds', 'remSleepSeconds']
     )
-    
-    
+
     if skip_zero_sleep and total_sleep == 0:
         print(f"Skipping sleep data for {sleep_date} as total sleep is 0")
         return
@@ -75,22 +117,20 @@ def create_sleep_data(client, database_id, sleep_data, skip_zero_sleep=True):
         "Awake Time": {"rich_text": [{"text": {"content": format_duration(daily_sleep.get('awakeSleepSeconds', 0))}}]},
         "Resting HR": {"number": sleep_data.get('restingHeartRate', 0)}
     }
-    
+
     client.pages.create(parent={"database_id": database_id}, properties=properties, icon={"emoji": "😴"})
     print(f"Created sleep entry for: {sleep_date}")
+
 
 def main():
     load_dotenv()
 
-    # Initialize Garmin and Notion clients using environment variables
     garmin_email = os.getenv("GARMIN_EMAIL")
     garmin_password = os.getenv("GARMIN_PASSWORD")
     notion_token = os.getenv("NOTION_TOKEN")
     database_id = os.getenv("NOTION_SLEEP_DB_ID")
 
-    # Initialize Garmin client and login
-    garmin = Garmin(garmin_email, garmin_password)
-    garmin.login()
+    garmin = login_garmin_with_mfa(garmin_email, garmin_password)
     client = Client(auth=notion_token)
 
     data = get_sleep_data(garmin)
@@ -98,6 +138,7 @@ def main():
         sleep_date = data.get('dailySleepDTO', {}).get('calendarDate')
         if sleep_date and not sleep_data_exists(client, database_id, sleep_date):
             create_sleep_data(client, database_id, data, skip_zero_sleep=True)
+
 
 if __name__ == '__main__':
     main()
