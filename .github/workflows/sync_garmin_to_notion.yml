@@ -4,6 +4,7 @@ on:
   schedule:
     - cron: '0 1 * * *' # Daily
   workflow_dispatch:
+
 env:
   TZ: 'America/Montreal'
 
@@ -30,6 +31,18 @@ jobs:
         run: |
           python -m pip install --upgrade pip setuptools wheel
           pip install -r requirements.txt
+
+      # ✅ Dit is de belangrijke nieuwe stap:
+      # Zet jouw Garmin tokens (uit Secrets) terug op de runner,
+      # zodat er geen nieuwe login + 2FA nodig is.
+      - name: Restore Garmin tokens
+        run: |
+          mkdir -p ~/.garminconnect
+          echo "${{ secrets.GARMIN_OAUTH1_B64 }}" | base64 -d > ~/.garminconnect/oauth1_token.json
+          echo "${{ secrets.GARMIN_OAUTH2_B64 }}" | base64 -d > ~/.garminconnect/oauth2_token.json
+          chmod 700 ~/.garminconnect
+          chmod 600 ~/.garminconnect/oauth1_token.json ~/.garminconnect/oauth2_token.json
+          ls -la ~/.garminconnect
 
       - name: Run script
         env:
